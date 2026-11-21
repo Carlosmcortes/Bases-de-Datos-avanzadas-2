@@ -1,2 +1,183 @@
-# Bases-de-Datos-avanzadas-2
+-- ============================================================================
+-- LABORATORIO 2: ÍNDICES, RESTRICCIONES Y TRANSACCIONES EN ORACLE
+-- Universidad: Fundación Universitaria Internacional de La Rioja (UNIR)
+-- Asignatura: Bases de Datos Avanzadas
+-- Docente: Deivis Eduard Ramirez Martinez
+-- Integrantes:
+--   - Nicolas Maldonado Silva
+--   - German Alexander Diaz Roncancio
+--   - Carlos Mario Cortes Orozco
+-- Fecha: 19/11/2026
+-- Esquema: HR (Oracle Database 21c XE)
+-- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 4.1. Preparación del entorno y creación de tablas base
+-- ----------------------------------------------------------------------------
+CREATE TABLE departments (
+    department_id   NUMBER(4)    CONSTRAINT dept_id_pk PRIMARY KEY,
+    department_name VARCHAR2(30) CONSTRAINT dept_name_nn NOT NULL,
+    manager_id      NUMBER(6),
+    location_id     NUMBER(4)
+);
+
+CREATE INDEX dept_loc_ix ON departments (location_id);
+
+CREATE TABLE employees (
+    employee_id    NUMBER(6)    CONSTRAINT emp_emp_id_pk PRIMARY KEY,
+    first_name     VARCHAR2(20),
+    last_name      VARCHAR2(25) CONSTRAINT emp_last_name_nn NOT NULL,
+    email          VARCHAR2(25) CONSTRAINT emp_email_nn NOT NULL
+                                CONSTRAINT emp_email_uk UNIQUE,
+    phone_number   VARCHAR2(20),
+    hire_date      DATE         CONSTRAINT emp_hire_date_nn NOT NULL,
+    job_id         VARCHAR2(10) CONSTRAINT emp_job_nn NOT NULL,
+    salary         NUMBER(8,2)  CONSTRAINT emp_salary_min CHECK (salary > 0),
+    commission_pct NUMBER(2,2),
+    manager_id     NUMBER(6)    CONSTRAINT emp_manager_fk REFERENCES employees(employee_id),
+    department_id  NUMBER(4)    CONSTRAINT emp_dept_fk REFERENCES departments(department_id)
+);
+
+CREATE INDEX emp_department_ix ON employees (department_id);
+CREATE INDEX emp_name_ix ON employees (last_name, first_name);
+
+-- Inserción de datos iniciales
+INSERT INTO departments VALUES (10, 'Administration', NULL, 1700);
+INSERT INTO departments VALUES (20, 'Marketing', NULL, 1800);
+INSERT INTO departments VALUES (50, 'Shipping', NULL, 1500);
+
+INSERT INTO employees VALUES (
+    100, 'Steven', 'King', 'SKING', '515.123.4567',
+    DATE '2003-06-17', 'AD_PRES', 24000, NULL, NULL, 10
+);
+INSERT INTO employees VALUES (
+    101, 'Neena', 'Kochhar', 'NKOCHHAR', '515.123.4568',
+    DATE '2005-09-21', 'AD_VP', 17000, NULL, 100, 20
+);
+INSERT INTO employees VALUES (
+    102, 'Lex', 'De Haan', 'LDEHAAN', '515.123.4569',
+    DATE '2001-01-13', 'AD_VP', 17000, NULL, 100, 50
+);
+COMMIT;
+
+-- ----------------------------------------------------------------------------
+-- 4.2. Consulta de índices y restricciones en el diccionario de datos
+-- ----------------------------------------------------------------------------
+SELECT table_name, index_name, uniqueness, status
+FROM user_indexes
+WHERE table_name IN ('EMPLOYEES', 'DEPARTMENTS')
+ORDER BY table_name, index_name;
+
+SELECT table_name, constraint_name, constraint_type, status, search_condition
+FROM user_constraints
+WHERE table_name IN ('EMPLOYEES', 'DEPARTMENTS')
+ORDER BY table_name, constraint_name;
+
+-- ----------------------------------------------------------------------------
+-- 4.3. Desactivación de restricciones, inserción inválida y prueba de reactivación
+-- ----------------------------------------------------------------------------
+ALTER TABLE employees DISABLE CONSTRAINT emp_salary_min;
+ALTER TABLE employees DISABLE CONSTRAINT emp_dept_fk;
+ALTER TABLE employees DISABLE CONSTRAINT emp_email_uk;
+
+INSERT INTO employees VALUES (
+    201, 'Carlos', 'Mendez', 'SKING', '515.123.9999',
+    DATE '2024-05-10', 'IT_PROG', -500, NULL, 100, 999
+);
+
+SELECT employee_id, first_name, email, salary, department_id
+FROM employees
+WHERE employee_id = 201;
+
+-- Intento de reactivación (genera error ORA-02293 por datos inválidos existentes)
+ALTER TABLE employees ENABLE CONSTRAINT emp_salary_min;
+
+-- ----------------------------------------------------------------------------
+-- 4.4. Corrección de datos, reactivación de restricciones y creación de DEPARTMENTS2
+-- ----------------------------------------------------------------------------
+DELETE FROM employees WHERE employee_id = 201;
+COMMIT;
+
+ALTER TABLE employees ENABLE CONSTRAINT emp_salary_min;
+ALTER TABLE employees ENABLE CONSTRAINT emp_dept_fk;
+ALTER TABLE employees ENABLE CONSTRAINT emp_email_uk;
+
+CREATE TABLE departments2 AS
+SELECT * FROM departments;
+
+SELECT table_name, constraint_name, constraint_type, status
+FROM user_constraints
+WHERE table_name IN ('DEPARTMENTS', 'DEPARTMENTS2')
+ORDER BY table_name, constraint_name;
+
+SELECT table_name, index_name, uniqueness, status
+FROM user_indexes
+WHERE table_name IN ('DEPARTMENTS', 'DEPARTMENTS2')
+ORDER BY table_name, index_name;
+
+-- ----------------------------------------------------------------------------
+-- 4.5. Control de transacciones, SAVEPOINT, ROLLBACK y bloque anónimo PL/SQL
+-- ----------------------------------------------------------------------------
+UPDATE departments
+SET location_id = 2500
+WHERE department_id = 20;
+
+SAVEPOINT punto_intermedio;
+
+DELETE FROM departments WHERE department_id = 50;
+
+ROLLBACK TO punto_intermedio;
+
+SELECT department_id, department_name, location_id
+FROM departments
+ORDER BY department_id;
+
+ROLLBACK;
+
+SET SERVEROUTPUT ON
+DECLARE
+    v_filas NUMBER;
+BEGIN
+    UPDATE departments
+    SET location_id = 2500
+    WHERE department_id = 20;
+
+    v_filas := SQL%ROWCOUNT;
+    DBMS_OUTPUT.PUT_LINE('Filas afectadas antes de ROLLBACK: ' || v_filas);
+
+    ROLLBACK;
+    DBMS_OUTPUT.PUT_LINE('Transacción revertida con ROLLBACK.');
+END;
+/
+
+-- ----------------------------------------------------------------------------
+-- 4.6. Pruebas de restricciones en DEPARTMENTS y transacciones sobre DEPARTMENTS2
+-- ----------------------------------------------------------------------------
+ALTER TABLE departments DISABLE CONSTRAINT dept_name_nn;
+INSERT INTO departments VALUES (90, NULL, NULL, 1700);
+SELECT * FROM departments WHERE department_id = 90;
+
+DELETE FROM departments WHERE department_id = 90;
+COMMIT;
+ALTER TABLE departments ENABLE CONSTRAINT dept_name_nn;
+
+-- Inserción de 3 tuplas en DEPARTMENTS2 sin confirmar (COMMIT)
+INSERT INTO departments2 VALUES (60, 'IT', NULL, 1400);
+INSERT INTO departments2 VALUES (70, 'Public Relations', NULL, 2700);
+INSERT INTO departments2 VALUES (80, 'Sales', NULL, 2500);
+SELECT * FROM departments2;
+
+-- Tras desconectar y reconectar la sesión:
+SELECT * FROM departments2;
+
+SET SERVEROUTPUT ON
+BEGIN
+    DBMS_OUTPUT.PUT_LINE('--- Inicio de la transacción sobre DEPARTMENTS2 ---');
+    INSERT INTO departments2 VALUES (60, 'IT', NULL, 1400);
+    COMMIT;
+    DBMS_OUTPUT.PUT_LINE('--- Finalización de la transacción (COMMIT ejecutado) ---');
+END;
+/
+
+SELECT * FROM departments2;# Bases-de-Datos-avanzadas-2
 Repositorio para uso del segundo trabajo de la asignatura Bases de Datos Avanzados
